@@ -319,6 +319,38 @@
   .add-template-row{
     border:1px dashed var(--rule);border-radius:10px;padding:10px 12px;margin-top:6px;
   }
+
+  /* ---------- Archives / recherche ---------- */
+  .search-row{ display:flex;gap:8px;margin-top:14px; }
+  .search-row input{
+    flex:1;padding:10px 12px;border:1px solid var(--rule);border-radius:10px;
+    font-size:15px;background:#fff;color:var(--ink);
+  }
+  .search-row button{
+    border:none;border-radius:10px;background:var(--accent);color:#fff;
+    padding:0 18px;font-weight:600;font-size:14px;cursor:pointer;
+  }
+  .result-group{ margin-top:20px; }
+  .result-group h3{
+    margin:0 0 8px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;
+    color:var(--gold);font-weight:700;
+  }
+  .result-item{
+    background:var(--paper-card);border:1px solid var(--rule);border-radius:10px;
+    padding:9px 12px;margin-bottom:7px;font-size:14px;
+  }
+  .result-item .rdate{ font-size:11.5px;color:var(--ink-soft);font-weight:600;margin-bottom:3px; }
+  .result-item.latest{ border-color:var(--accent);background:var(--accent-soft); }
+  .result-item.latest .rdate{ color:var(--accent); }
+  .chat-empty{ font-size:13px;color:var(--ink-soft);font-style:italic;margin-top:8px; }
+  .archived-link{
+    display:inline-block;margin-top:10px;font-size:13px;color:var(--accent);
+    text-decoration:underline;background:none;border:none;cursor:pointer;padding:0;
+  }
+  .archivedtaskrow{
+    padding:8px 4px;border-bottom:1px solid var(--rule);font-size:14px;color:var(--ink-soft);
+  }
+  .archivedtaskrow .t{ text-decoration:line-through; }
 </style>
 </head>
 <body>
@@ -394,6 +426,7 @@
       </div>
       <ul class="tasklist" id="taskListUl"></ul>
       <div class="empty-tasks" id="emptyTasks" style="display:none;">Aucune tâche pour l'instant.</div>
+      <button class="archived-link" id="viewArchivedTasksBtn">Voir les tâches archivées…</button>
     </main>
   </section>
   <section id="panel-horaire" class="tabpanel">
@@ -419,6 +452,26 @@
       <button class="manage-link" id="manageActivitiesBtn">Modifier mes activités…</button>
     </main>
   </section>
+  <section id="panel-archives" class="tabpanel">
+    <div class="topbar">
+      <div class="nav">
+        <div style="text-align:center;">
+          <div class="navlabel">Archives</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;align-items:center;max-width:640px;margin:0 auto;">
+        <div class="status" id="archivesStatus">&nbsp;</div>
+      </div>
+    </div>
+    <main>
+      <div class="chat-empty">Cherche un mot-clé dans ton journal, tes tâches et ton horaire — ex. « cardio », « dentiste ». Le résultat le plus récent est mis en évidence.</div>
+      <div class="search-row">
+        <input type="text" id="archiveSearchInput" placeholder="Mot-clé…">
+        <button id="archiveSearchBtn">Chercher</button>
+      </div>
+      <div id="archiveResults"></div>
+    </main>
+  </section>
 
 </div>
 
@@ -432,6 +485,19 @@
   <button class="tabbtn" id="tab-horaire" data-tab="horaire">
     <span>Horaire</span><span class="dot"></span>
   </button>
+  <button class="tabbtn" id="tab-archives" data-tab="archives">
+    <span>Archives</span><span class="dot"></span>
+  </button>
+</div>
+
+<!-- Tâches archivées -->
+<div class="modal-overlay" id="archivedTasksOverlay" style="display:none;">
+  <div class="modal-sheet">
+    <button class="modal-close" id="archivedTasksClose">✕</button>
+    <h2>Tâches archivées</h2>
+    <div id="archivedTasksList"></div>
+    <div class="chat-empty" id="archivedTasksEmpty" style="display:none;">Aucune tâche archivée pour l'instant.</div>
+  </div>
 </div>
 
 <!-- Gestion des activités récurrentes -->
@@ -667,6 +733,7 @@ document.getElementById('signoutBtn').addEventListener('click', async () => {
   document.getElementById('panel-journal').classList.add('active');
   document.getElementById('panel-taches').classList.remove('active');
   document.getElementById('panel-horaire').classList.remove('active');
+  document.getElementById('panel-archives').classList.remove('active');
 });
 
 async function apiFetch(path, options={}){
@@ -862,6 +929,7 @@ document.querySelectorAll('.tabbtn').forEach(btn => {
     document.getElementById('panel-journal').classList.toggle('active', tab === 'journal');
     document.getElementById('panel-taches').classList.toggle('active', tab === 'taches');
     document.getElementById('panel-horaire').classList.toggle('active', tab === 'horaire');
+    document.getElementById('panel-archives').classList.toggle('active', tab === 'archives');
     if(tab === 'taches') loadTasks();
     if(tab === 'horaire') loadHoraire();
   });
@@ -1144,6 +1212,7 @@ function setTasksStatus(text, isError){
 async function loadTasks(){
   setTasksStatus('Chargement…');
   try{
+    await archiveOldCompletedTasks();
     const res = await apiFetch(`tasks?archived=eq.false&order=done.asc,position.asc`);
     tasksCache = await res.json();
     renderTasks();
@@ -1153,6 +1222,46 @@ async function loadTasks(){
     setTasksStatus('Impossible de charger — vérifie ta connexion', true);
   }
 }
+
+async function archiveOldCompletedTasks(){
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const iso = monthStart.toISOString();
+  try{
+    await apiFetch(`tasks?done=eq.true&archived=eq.false&completed_at=lt.${encodeURIComponent(iso)}`, {
+      method:'PATCH', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({ archived:true })
+    });
+  }catch(err){
+    console.error('Archivage automatique échoué', err);
+  }
+}
+
+document.getElementById('viewArchivedTasksBtn').addEventListener('click', openArchivedTasks);
+async function openArchivedTasks(){
+  document.getElementById('archivedTasksOverlay').style.display = 'flex';
+  const list = document.getElementById('archivedTasksList');
+  const empty = document.getElementById('archivedTasksEmpty');
+  list.innerHTML = 'Chargement…';
+  try{
+    const res = await apiFetch(`tasks?archived=eq.true&order=completed_at.desc`);
+    const rows = await res.json();
+    list.innerHTML = '';
+    empty.style.display = rows.length === 0 ? 'block' : 'none';
+    rows.forEach(t => {
+      const row = document.createElement('div');
+      row.className = 'archivedtaskrow';
+      const done = t.completed_at ? new Date(t.completed_at).toLocaleDateString('fr-CA') : '';
+      row.innerHTML = `<span class="t">${t.title}</span> — complétée le ${done}`;
+      list.appendChild(row);
+    });
+  }catch(err){
+    console.error(err);
+    list.innerHTML = 'Impossible de charger.';
+  }
+}
+document.getElementById('archivedTasksClose').addEventListener('click', () => {
+  document.getElementById('archivedTasksOverlay').style.display = 'none';
+});
 
 function renderTasks(){
   const ul = document.getElementById('taskListUl');
@@ -1433,6 +1542,124 @@ function playDong(kind){
       osc.stop(start + 0.32);
     });
   }catch(e){ console.error('Audio indisponible', e); }
+}
+
+/* ================= Archives / recherche par mot-clé ================= */
+function esc(s){
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+document.getElementById('archiveSearchBtn').addEventListener('click', runArchiveSearch);
+document.getElementById('archiveSearchInput').addEventListener('keydown', (e) => {
+  if(e.key === 'Enter') runArchiveSearch();
+});
+
+async function runArchiveSearch(){
+  const kw = document.getElementById('archiveSearchInput').value.trim();
+  const results = document.getElementById('archiveResults');
+  if(!kw){ results.innerHTML = ''; return; }
+  document.getElementById('archivesStatus').textContent = 'Recherche…';
+  results.innerHTML = '';
+
+  try{
+    const [journalRows, taskRows, horaireRows] = await Promise.all([
+      searchJournal(kw),
+      searchTasks(kw),
+      searchHoraire(kw)
+    ]);
+
+    renderResultGroup('Journal', journalRows, (r) => {
+      const champs = ['quicknote','reveil','matin','am','diner','pm','souper','soiree'];
+      const champLabels = {quicknote:'Note',reveil:'Réveil',matin:'Matin',am:'Am',diner:'Dîner',pm:'Pm',souper:'Souper',soiree:'Soirée'};
+      const hit = champs.find(c => (r[c]||'').toLowerCase().includes(kw.toLowerCase()));
+      const extrait = hit ? `${champLabels[hit]} : ${r[hit]}` : '';
+      return { date: r.entry_date, text: extrait };
+    });
+
+    renderResultGroup('Tâches', taskRows, (r) => {
+      const extrait = (r.notes||'').toLowerCase().includes(kw.toLowerCase()) ? `Note : ${r.notes}` : '';
+      return { date: r.completed_at ? r.completed_at.slice(0,10) : (r.due_date || r.created_at.slice(0,10)), text: r.title + (extrait ? ' — ' + extrait : '') };
+    });
+
+    renderResultGroup('Horaire', horaireRows, (r) => {
+      return { date: r.entry_date, text: r.label + (r.comment ? ' — ' + r.comment : '') };
+    });
+
+    document.getElementById('archivesStatus').textContent = '';
+  }catch(err){
+    console.error(err);
+    document.getElementById('archivesStatus').textContent = '';
+    results.innerHTML = '<div class="chat-empty">Erreur pendant la recherche — vérifie ta connexion.</div>';
+  }
+}
+
+async function searchJournal(kw){
+  const cols = ['quicknote','reveil','matin','am','diner','pm','souper','soiree'];
+  const orClause = cols.map(c => `${c}.ilike.*${encodeURIComponent(kw)}*`).join(',');
+  const res = await apiFetch(`journal_entries?or=(${orClause})&order=entry_date.desc&limit=15&select=entry_date,${cols.join(',')}`);
+  return res.json();
+}
+
+async function searchTasks(kw){
+  const orClause = `title.ilike.*${encodeURIComponent(kw)}*,notes.ilike.*${encodeURIComponent(kw)}*`;
+  const res = await apiFetch(`tasks?or=(${orClause})&order=created_at.desc&limit=15&select=title,notes,due_date,completed_at,created_at`);
+  return res.json();
+}
+
+async function searchHoraire(kw){
+  const tplRes = await apiFetch(`schedule_templates?label.ilike.*${encodeURIComponent(kw)}*&select=id,label`);
+  const templates = await tplRes.json();
+  const tplMap = {};
+  templates.forEach(t => tplMap[t.id] = t.label);
+
+  let byTemplate = [];
+  if(templates.length > 0){
+    const ids = templates.map(t => t.id).join(',');
+    const entRes = await apiFetch(`schedule_entries?template_id=in.(${ids})&done=eq.true&order=entry_date.desc&limit=15&select=entry_date,template_id,comment`);
+    byTemplate = (await entRes.json()).map(e => ({ entry_date:e.entry_date, label:tplMap[e.template_id], comment:e.comment }));
+  }
+
+  const commentRes = await apiFetch(`schedule_entries?comment.ilike.*${encodeURIComponent(kw)}*&order=entry_date.desc&limit=15&select=entry_date,template_id,comment`);
+  const commentHits = await commentRes.json();
+  const allTplRes = await apiFetch(`schedule_templates?select=id,label`);
+  const allTpl = await allTplRes.json();
+  const allTplMap = {};
+  allTpl.forEach(t => allTplMap[t.id] = t.label);
+  const byComment = commentHits.map(e => ({ entry_date:e.entry_date, label:allTplMap[e.template_id] || '?', comment:e.comment }));
+
+  const merged = [...byTemplate, ...byComment];
+  const seen = new Set();
+  return merged.filter(r => {
+    const key = r.entry_date + '|' + r.label;
+    if(seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a,b) => b.entry_date.localeCompare(a.entry_date));
+}
+
+function renderResultGroup(title, rows, mapper){
+  const container = document.getElementById('archiveResults');
+  const group = document.createElement('div');
+  group.className = 'result-group';
+  const h = document.createElement('h3');
+  h.textContent = title + (rows.length ? '' : ' — aucun résultat');
+  group.appendChild(h);
+  rows.forEach((r, i) => {
+    const mapped = mapper(r);
+    const item = document.createElement('div');
+    item.className = 'result-item' + (i === 0 ? ' latest' : '');
+    const dateLine = document.createElement('div');
+    dateLine.className = 'rdate';
+    dateLine.textContent = (i === 0 ? 'Plus récent — ' : '') + mapped.date;
+    const textLine = document.createElement('div');
+    textLine.textContent = mapped.text;
+    item.appendChild(dateLine);
+    item.appendChild(textLine);
+    group.appendChild(item);
+  });
+  container.appendChild(group);
 }
 
 /* ================= Démarrage ================= */
