@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Journal</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
     --paper:#F1EFE8;
@@ -351,6 +352,16 @@
     padding:8px 4px;border-bottom:1px solid var(--rule);font-size:14px;color:var(--ink-soft);
   }
   .archivedtaskrow .t{ text-decoration:line-through; }
+
+  /* ---------- Google Calendar ---------- */
+  .googlesync{
+    display:flex;align-items:center;gap:8px;margin:8px 0 4px;
+  }
+  .googlesync button{
+    border:1px solid var(--rule);background:#fff;border-radius:8px;
+    padding:6px 12px;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:600;
+  }
+  .googlesync .gstatus{ font-size:11.5px;color:var(--ink-soft); }
 </style>
 </head>
 <body>
@@ -391,6 +402,10 @@
 
     <main>
       <div class="datehead" id="dateHead"></div>
+      <div class="googlesync">
+        <button id="syncGoogleBtn">Synchroniser mon horaire (Google)</button>
+        <span class="gstatus" id="googleStatus">Non connecté</span>
+      </div>
       <textarea class="quicknote" id="quicknote" rows="1" placeholder="Une ligne pour aujourd'hui…"></textarea>
 
       <div id="lockedBanner" class="locked-banner" style="display:none;">
@@ -915,11 +930,112 @@ async function loadDay(){
     if(el) el.value = data[sec.key] || '';
   });
   refreshTaskPreview();
+  if(googleAccessToken && !locked) syncGoogleEventsForCurrentDay();
 }
 
 document.getElementById('prevBtn').addEventListener('click', () => { offset -= 1; loadDay(); });
 document.getElementById('nextBtn').addEventListener('click', () => { if(offset < 0){ offset += 1; loadDay(); } });
 document.getElementById('quicknote').addEventListener('input', onFieldInput);
+
+/* ================= Google Calendar ================= */
+const GOOGLE_CLIENT_ID = "192503405171-dk6usfo21n5o2temssbjjhhfs812nua3.apps.googleusercontent.com";
+const GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+let googleAccessToken = null;
+let googleTokenClient = null;
+
+function setGoogleStatus(text){
+  document.getElementById('googleStatus').textContent = text;
+}
+
+function initGoogleClient(){
+  if(googleTokenClient) return true;
+  if(!window.google || !google.accounts || !google.accounts.oauth2) return false;
+  googleTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_CLIENT_ID,
+    scope: GOOGLE_SCOPE,
+    callback: (resp) => {
+      if(resp && resp.access_token){
+        googleAccessToken = resp.access_token;
+        setGoogleStatus('Connecté');
+        syncGoogleEventsForCurrentDay();
+      } else {
+        setGoogleStatus('Connexion refusée');
+      }
+    }
+  });
+  return true;
+}
+
+document.getElementById('syncGoogleBtn').addEventListener('click', () => {
+  const ready = initGoogleClient();
+  if(!ready){
+    setGoogleStatus("Chargement de Google…");
+    setTimeout(() => document.getElementById('syncGoogleBtn').click(), 800);
+    return;
+  }
+  googleTokenClient.requestAccessToken({ prompt: googleAccessToken ? '' : 'consent' });
+});
+
+async function syncGoogleEventsForCurrentDay(){
+  if(!googleAccessToken) return;
+  if(offset < -2) return; // journée verrouillée, pas de synchro
+  const d = dateForOffset(offset);
+  const dayStart = new Date(d); dayStart.setHours(0,0,0,0);
+  const dayEnd = new Date(d); dayEnd.setHours(23,59,59,999);
+  const params = new URLSearchParams({
+    timeMin: dayStart.toISOString(),
+    timeMax: dayEnd.toISOString(),
+    singleEvents: 'true',
+    orderBy: 'startTime'
+  });
+  setGoogleStatus('Synchronisation…');
+  try{
+    const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`, {
+      headers: { Authorization: 'Bearer ' + googleAccessToken }
+    });
+    if(res.status === 401){
+      googleAccessToken = null;
+      setGoogleStatus('Session expirée — reclique pour te reconnecter');
+      return;
+    }
+    if(!res.ok) throw new Error('Erreur Google Calendar (' + res.status + ')');
+    const data = await res.json();
+    applyGoogleEventsToJournal(data.items || []);
+  }catch(err){
+    console.error(err);
+    setGoogleStatus('Échec de la synchro');
+  }
+}
+
+function applyGoogleEventsToJournal(events){
+  const buckets = { am:[], pm:[], soiree:[] };
+  events.forEach(ev => {
+    if(!ev.start || !ev.start.dateTime) return; // ignore les événements "journée entière"
+    const start = new Date(ev.start.dateTime);
+    const h = start.getHours();
+    const timeLabel = start.toLocaleTimeString('fr-CA', {hour:'2-digit', minute:'2-digit'});
+    const line = `${timeLabel} ${ev.summary || '(sans titre)'}`;
+    if(h >= 6 && h < 12) buckets.am.push(line);
+    else if(h >= 12 && h < 17) buckets.pm.push(line);
+    else if(h >= 17 && h < 22) buckets.soiree.push(line);
+  });
+  let changed = false;
+  ['am','pm','soiree'].forEach(key => {
+    const el = document.getElementById('field-' + key);
+    if(!el) return;
+    buckets[key].forEach(line => {
+      if(!el.value.includes(line)){
+        el.value = el.value ? el.value + '\n' + line : line;
+        changed = true;
+      }
+    });
+  });
+  if(changed){
+    scheduleSave();
+    refreshTaskPreview();
+  }
+  setGoogleStatus('Connecté — synchronisé');
+}
 
 /* ================= Onglets ================= */
 document.querySelectorAll('.tabbtn').forEach(btn => {
