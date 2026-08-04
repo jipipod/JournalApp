@@ -362,6 +362,31 @@
     padding:6px 12px;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:600;
   }
   .googlesync .gstatus{ font-size:11.5px;color:var(--ink-soft); }
+
+  .icloudbox{
+    margin:6px 0 4px;padding:10px 12px;border:1px solid var(--rule);border-radius:10px;
+    background:var(--paper-card);
+  }
+  .icloudbox.collapsed .icloud-details{ display:none; }
+  .icloud-toggle{
+    display:flex;justify-content:space-between;align-items:center;cursor:pointer;
+    font-size:12.5px;font-weight:600;color:var(--ink);
+  }
+  .icloud-details{ margin-top:10px; }
+  .icloud-details label{
+    display:block;font-size:11px;letter-spacing:0.05em;text-transform:uppercase;
+    color:var(--ink-soft);font-weight:600;margin:8px 0 3px;
+  }
+  .icloud-details input[type=email], .icloud-details input[type=password]{
+    width:100%;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;
+    font-size:14px;background:#fff;color:var(--ink);
+  }
+  .icloud-details button{
+    margin-top:10px;border:1px solid var(--rule);background:#fff;border-radius:8px;
+    padding:6px 12px;font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:600;
+  }
+  .icloud-cal-list{ margin-top:8px; }
+  .icloud-cal-row{ display:flex;align-items:center;gap:8px;font-size:13.5px;margin-bottom:4px; }
 </style>
 </head>
 <body>
@@ -406,6 +431,24 @@
         <button id="syncGoogleBtn">Synchroniser mon horaire (Google)</button>
         <span class="gstatus" id="googleStatus">Non connecté</span>
       </div>
+
+      <div class="icloudbox collapsed" id="icloudBox">
+        <div class="icloud-toggle" id="icloudToggle">
+          <span>iCloud (latlec@icloud.com) — <span id="icloudStatus">non connecté</span></span>
+          <span id="icloudChevron">▸</span>
+        </div>
+        <div class="icloud-details">
+          <label for="icloudEmail">Identifiant Apple</label>
+          <input type="email" id="icloudEmail" placeholder="latlec@icloud.com">
+          <label for="icloudPassword">Mot de passe spécifique à l'application</label>
+          <input type="password" id="icloudPassword" placeholder="xxxx-xxxx-xxxx-xxxx">
+          <button id="icloudConnectBtn">Connecter et lister mes calendriers</button>
+          <div class="icloud-cal-list" id="icloudCalList"></div>
+          <button id="icloudSaveCalsBtn" style="display:none;">Enregistrer les calendriers choisis</button>
+          <button id="syncIcloudBtn" style="display:none;">Synchroniser mon horaire (iCloud)</button>
+        </div>
+      </div>
+
       <textarea class="quicknote" id="quicknote" rows="1" placeholder="Une ligne pour aujourd'hui…"></textarea>
 
       <div id="lockedBanner" class="locked-banner" style="display:none;">
@@ -1002,6 +1045,7 @@ async function syncGoogleEventsForCurrentDay(){
     if(!res.ok) throw new Error('Erreur Google Calendar (' + res.status + ')');
     const data = await res.json();
     applyGoogleEventsToJournal(data.items || []);
+    setGoogleStatus('Connecté — synchronisé');
   }catch(err){
     console.error(err);
     setGoogleStatus('Échec de la synchro');
@@ -1009,13 +1053,20 @@ async function syncGoogleEventsForCurrentDay(){
 }
 
 function applyGoogleEventsToJournal(events){
+  const normalized = events
+    .filter(ev => ev.start && ev.start.dateTime)
+    .map(ev => ({ summary: ev.summary || '(sans titre)', startISO: ev.start.dateTime }));
+  applyCalendarEventsToJournal(normalized);
+}
+
+function applyCalendarEventsToJournal(events){
   const buckets = { am:[], pm:[], soiree:[] };
   events.forEach(ev => {
-    if(!ev.start || !ev.start.dateTime) return; // ignore les événements "journée entière"
-    const start = new Date(ev.start.dateTime);
+    const start = new Date(ev.startISO);
+    if(isNaN(start.getTime())) return;
     const h = start.getHours();
     const timeLabel = start.toLocaleTimeString('fr-CA', {hour:'2-digit', minute:'2-digit'});
-    const line = `${timeLabel} ${ev.summary || '(sans titre)'}`;
+    const line = `${timeLabel} ${ev.summary}`;
     if(h >= 6 && h < 12) buckets.am.push(line);
     else if(h >= 12 && h < 17) buckets.pm.push(line);
     else if(h >= 17 && h < 22) buckets.soiree.push(line);
@@ -1035,7 +1086,122 @@ function applyGoogleEventsToJournal(events){
     scheduleSave();
     refreshTaskPreview();
   }
-  setGoogleStatus('Connecté — synchronisé');
+}
+
+/* ================= iCloud (CalDAV via Edge Function) ================= */
+document.getElementById('icloudToggle').addEventListener('click', () => {
+  document.getElementById('icloudBox').classList.toggle('collapsed');
+});
+
+async function callIcloudFunction(action, extra){
+  const ok = await ensureValidSession();
+  if(!ok) throw new Error("session expirée");
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/icloud-events`, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + session.access_token,
+      "apikey": SUPABASE_ANON_KEY,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(Object.assign({ action }, extra || {}))
+  });
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(data.error || "Erreur iCloud");
+  return data;
+}
+
+async function saveIcloudCredentials(email, password){
+  const res = await apiFetch(`calendar_credentials?select=id`);
+  const rows = await res.json();
+  if(rows && rows[0]){
+    await apiFetch(`calendar_credentials?id=eq.${rows[0].id}`, {
+      method:'PATCH', headers:{'Prefer':'return=minimal'},
+      body: JSON.stringify({ icloud_email: email, icloud_app_password: password, updated_at: new Date().toISOString() })
+    });
+  } else {
+    await apiFetch(`calendar_credentials`, {
+      method:'POST', headers:{'Prefer':'return=minimal'},
+      body: JSON.stringify({ icloud_email: email, icloud_app_password: password })
+    });
+  }
+}
+
+let icloudCalendarsFound = [];
+
+document.getElementById('icloudConnectBtn').addEventListener('click', async () => {
+  const email = document.getElementById('icloudEmail').value.trim();
+  const password = document.getElementById('icloudPassword').value.trim();
+  if(!email || !password){
+    document.getElementById('icloudStatus').textContent = "identifiant et mot de passe requis";
+    return;
+  }
+  document.getElementById('icloudStatus').textContent = 'connexion…';
+  try{
+    await saveIcloudCredentials(email, password);
+    const data = await callIcloudFunction('list-calendars');
+    icloudCalendarsFound = data.calendars || [];
+    renderIcloudCalList();
+    document.getElementById('icloudStatus').textContent = icloudCalendarsFound.length + ' calendrier(s) trouvé(s)';
+    document.getElementById('icloudSaveCalsBtn').style.display = 'inline-block';
+  }catch(err){
+    console.error(err);
+    document.getElementById('icloudStatus').textContent = 'échec : ' + err.message;
+  }
+});
+
+function renderIcloudCalList(){
+  const container = document.getElementById('icloudCalList');
+  container.innerHTML = '';
+  icloudCalendarsFound.forEach((cal, i) => {
+    const row = document.createElement('div');
+    row.className = 'icloud-cal-row';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = 'icloudcal-' + i;
+    cb.checked = true;
+    const label = document.createElement('label');
+    label.htmlFor = cb.id;
+    label.textContent = cal.name;
+    row.appendChild(cb);
+    row.appendChild(label);
+    container.appendChild(row);
+  });
+}
+
+document.getElementById('icloudSaveCalsBtn').addEventListener('click', async () => {
+  const selected = icloudCalendarsFound.filter((cal, i) => document.getElementById('icloudcal-' + i).checked);
+  try{
+    const res = await apiFetch(`calendar_credentials?select=id`);
+    const rows = await res.json();
+    if(rows && rows[0]){
+      await apiFetch(`calendar_credentials?id=eq.${rows[0].id}`, {
+        method:'PATCH', headers:{'Prefer':'return=minimal'},
+        body: JSON.stringify({ icloud_calendars: selected })
+      });
+    }
+    document.getElementById('icloudStatus').textContent = selected.length + ' calendrier(s) synchronisés';
+    document.getElementById('syncIcloudBtn').style.display = 'inline-block';
+  }catch(err){
+    console.error(err);
+    document.getElementById('icloudStatus').textContent = 'échec de l\'enregistrement';
+  }
+});
+
+document.getElementById('syncIcloudBtn').addEventListener('click', () => syncIcloudEventsForCurrentDay());
+
+async function syncIcloudEventsForCurrentDay(){
+  if(offset < -2) return;
+  const d = dateForOffset(offset);
+  const entry_date = isoKey(d);
+  document.getElementById('icloudStatus').textContent = 'synchronisation…';
+  try{
+    const data = await callIcloudFunction('get-events', { date: entry_date });
+    applyCalendarEventsToJournal(data.events || []);
+    document.getElementById('icloudStatus').textContent = 'synchronisé';
+  }catch(err){
+    console.error(err);
+    document.getElementById('icloudStatus').textContent = 'échec : ' + err.message;
+  }
 }
 
 /* ================= Onglets ================= */
