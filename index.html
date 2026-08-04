@@ -599,6 +599,7 @@ const SECTIONS = [
   {key:"pm",     label:"Pm", hours:"12 h – 16 h 59"},
   {key:"souper", label:"Souper"},
   {key:"soiree", label:"Soirée", hours:"17 h – 21 h 59"},
+  {key:"couche", label:"Couché"},
 ];
 
 const DAY_NAMES = ["dimanche","lundi","mardi","mercredi","jeudi","vendredi","samedi"];
@@ -909,7 +910,7 @@ async function loadDay(){
 
   setStatus('Chargement…');
   const entry_date = isoKey(d);
-  let data = { quicknote:'', reveil:'', matin:'', am:'', diner:'', pm:'', souper:'', soiree:'' };
+  let data = { quicknote:'', reveil:'', matin:'', am:'', diner:'', pm:'', souper:'', soiree:'', couche:'' };
   currentRowId = null;
   try{
     const res = await apiFetch(`journal_entries?entry_date=eq.${entry_date}&select=*`);
@@ -1687,8 +1688,8 @@ async function runArchiveSearch(){
     ]);
 
     renderResultGroup('Journal', journalRows.slice(0,15), (r) => {
-      const champs = ['quicknote','reveil','matin','am','diner','pm','souper','soiree'];
-      const champLabels = {quicknote:'Note',reveil:'Réveil',matin:'Matin',am:'Am',diner:'Dîner',pm:'Pm',souper:'Souper',soiree:'Soirée'};
+      const champs = ['quicknote','reveil','matin','am','diner','pm','souper','soiree','couche'];
+      const champLabels = {quicknote:'Note',reveil:'Réveil',matin:'Matin',am:'Am',diner:'Dîner',pm:'Pm',souper:'Souper',soiree:'Soirée',couche:'Couché'};
       const hit = champs.find(c => (r[c]||'').toLowerCase().includes(kw.toLowerCase()));
       const extrait = hit ? `${champLabels[hit]} : ${r[hit]}` : '';
       return { date: r.entry_date, text: extrait };
@@ -1712,7 +1713,7 @@ async function runArchiveSearch(){
 }
 
 async function searchJournal(kw){
-  const cols = ['quicknote','reveil','matin','am','diner','pm','souper','soiree'];
+  const cols = ['quicknote','reveil','matin','am','diner','pm','souper','soiree','couche'];
   const res = await apiFetch(`journal_entries?order=entry_date.desc&limit=400&select=entry_date,${cols.join(',')}`);
   const rows = await res.json();
   const kwLower = kw.toLowerCase();
