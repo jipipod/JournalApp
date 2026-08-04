@@ -1570,7 +1570,7 @@ async function runArchiveSearch(){
       searchHoraire(kw)
     ]);
 
-    renderResultGroup('Journal', journalRows, (r) => {
+    renderResultGroup('Journal', journalRows.slice(0,15), (r) => {
       const champs = ['quicknote','reveil','matin','am','diner','pm','souper','soiree'];
       const champLabels = {quicknote:'Note',reveil:'Réveil',matin:'Matin',am:'Am',diner:'Dîner',pm:'Pm',souper:'Souper',soiree:'Soirée'};
       const hit = champs.find(c => (r[c]||'').toLowerCase().includes(kw.toLowerCase()));
@@ -1578,12 +1578,12 @@ async function runArchiveSearch(){
       return { date: r.entry_date, text: extrait };
     });
 
-    renderResultGroup('Tâches', taskRows, (r) => {
+    renderResultGroup('Tâches', taskRows.slice(0,15), (r) => {
       const extrait = (r.notes||'').toLowerCase().includes(kw.toLowerCase()) ? `Note : ${r.notes}` : '';
       return { date: r.completed_at ? r.completed_at.slice(0,10) : (r.due_date || r.created_at.slice(0,10)), text: r.title + (extrait ? ' — ' + extrait : '') };
     });
 
-    renderResultGroup('Horaire', horaireRows, (r) => {
+    renderResultGroup('Horaire', horaireRows.slice(0,15), (r) => {
       return { date: r.entry_date, text: r.label + (r.comment ? ' — ' + r.comment : '') };
     });
 
@@ -1597,46 +1597,33 @@ async function runArchiveSearch(){
 
 async function searchJournal(kw){
   const cols = ['quicknote','reveil','matin','am','diner','pm','souper','soiree'];
-  const orClause = cols.map(c => `${c}.ilike.*${encodeURIComponent(kw)}*`).join(',');
-  const res = await apiFetch(`journal_entries?or=(${orClause})&order=entry_date.desc&limit=15&select=entry_date,${cols.join(',')}`);
-  return res.json();
+  const res = await apiFetch(`journal_entries?order=entry_date.desc&limit=400&select=entry_date,${cols.join(',')}`);
+  const rows = await res.json();
+  const kwLower = kw.toLowerCase();
+  return rows.filter(r => cols.some(c => (r[c]||'').toLowerCase().includes(kwLower)));
 }
 
 async function searchTasks(kw){
-  const orClause = `title.ilike.*${encodeURIComponent(kw)}*,notes.ilike.*${encodeURIComponent(kw)}*`;
-  const res = await apiFetch(`tasks?or=(${orClause})&order=created_at.desc&limit=15&select=title,notes,due_date,completed_at,created_at`);
-  return res.json();
+  const res = await apiFetch(`tasks?order=created_at.desc&limit=500&select=title,notes,due_date,completed_at,created_at`);
+  const rows = await res.json();
+  const kwLower = kw.toLowerCase();
+  return rows.filter(r => (r.title||'').toLowerCase().includes(kwLower) || (r.notes||'').toLowerCase().includes(kwLower));
 }
 
 async function searchHoraire(kw){
-  const tplRes = await apiFetch(`schedule_templates?label.ilike.*${encodeURIComponent(kw)}*&select=id,label`);
+  const [tplRes, entRes] = await Promise.all([
+    apiFetch(`schedule_templates?select=id,label`),
+    apiFetch(`schedule_entries?done=eq.true&order=entry_date.desc&limit=1000&select=entry_date,template_id,comment`)
+  ]);
   const templates = await tplRes.json();
   const tplMap = {};
   templates.forEach(t => tplMap[t.id] = t.label);
-
-  let byTemplate = [];
-  if(templates.length > 0){
-    const ids = templates.map(t => t.id).join(',');
-    const entRes = await apiFetch(`schedule_entries?template_id=in.(${ids})&done=eq.true&order=entry_date.desc&limit=15&select=entry_date,template_id,comment`);
-    byTemplate = (await entRes.json()).map(e => ({ entry_date:e.entry_date, label:tplMap[e.template_id], comment:e.comment }));
-  }
-
-  const commentRes = await apiFetch(`schedule_entries?comment.ilike.*${encodeURIComponent(kw)}*&order=entry_date.desc&limit=15&select=entry_date,template_id,comment`);
-  const commentHits = await commentRes.json();
-  const allTplRes = await apiFetch(`schedule_templates?select=id,label`);
-  const allTpl = await allTplRes.json();
-  const allTplMap = {};
-  allTpl.forEach(t => allTplMap[t.id] = t.label);
-  const byComment = commentHits.map(e => ({ entry_date:e.entry_date, label:allTplMap[e.template_id] || '?', comment:e.comment }));
-
-  const merged = [...byTemplate, ...byComment];
-  const seen = new Set();
-  return merged.filter(r => {
-    const key = r.entry_date + '|' + r.label;
-    if(seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).sort((a,b) => b.entry_date.localeCompare(a.entry_date));
+  const entries = await entRes.json();
+  const kwLower = kw.toLowerCase();
+  return entries
+    .map(e => ({ entry_date: e.entry_date, label: tplMap[e.template_id] || '?', comment: e.comment || '' }))
+    .filter(r => r.label.toLowerCase().includes(kwLower) || r.comment.toLowerCase().includes(kwLower))
+    .sort((a,b) => b.entry_date.localeCompare(a.entry_date));
 }
 
 function renderResultGroup(title, rows, mapper){
