@@ -1053,15 +1053,24 @@ async function syncGoogleEventsForCurrentDay(){
 }
 
 function applyGoogleEventsToJournal(events){
-  const normalized = events
+  const timed = events
     .filter(ev => ev.start && ev.start.dateTime)
-    .map(ev => ({ summary: ev.summary || '(sans titre)', startISO: ev.start.dateTime }));
-  applyCalendarEventsToJournal(normalized);
+    .map(ev => ({ summary: ev.summary || '(sans titre)', startISO: ev.start.dateTime, allDay:false }));
+  const allDay = events
+    .filter(ev => ev.start && ev.start.date && !ev.start.dateTime)
+    .map(ev => ({ summary: ev.summary || '(sans titre)', startISO: ev.start.date, allDay:true }));
+  applyCalendarEventsToJournal([...timed, ...allDay]);
 }
 
 function applyCalendarEventsToJournal(events){
   const buckets = { am:[], pm:[], soiree:[] };
+  const allDayLines = [];
   events.forEach(ev => {
+    if(ev.allDay){
+      const line = `(Toute la journée) ${ev.summary}`;
+      allDayLines.push(line);
+      return;
+    }
     const start = new Date(ev.startISO);
     if(isNaN(start.getTime())) return;
     const h = start.getHours();
@@ -1072,6 +1081,15 @@ function applyCalendarEventsToJournal(events){
     else if(h >= 17 && h < 22) buckets.soiree.push(line);
   });
   let changed = false;
+  const matinEl = document.getElementById('field-matin');
+  if(matinEl){
+    allDayLines.forEach(line => {
+      if(!matinEl.value.includes(line)){
+        matinEl.value = line + (matinEl.value ? '\n' + matinEl.value : '');
+        changed = true;
+      }
+    });
+  }
   ['am','pm','soiree'].forEach(key => {
     const el = document.getElementById('field-' + key);
     if(!el) return;
