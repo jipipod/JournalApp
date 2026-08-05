@@ -664,17 +664,17 @@ function decodeJwt(token){
 
 async function saveSession(s){
   session = s;
-  try{ await window.storage.set(SESSION_KEY, JSON.stringify(s), false); }
+  try{ localStorage.setItem(SESSION_KEY, JSON.stringify(s)); }
   catch(e){ console.error('Impossible de sauvegarder la session', e); }
 }
 async function clearSession(){
   session = null;
-  try{ await window.storage.delete(SESSION_KEY, false); }catch(e){}
+  try{ localStorage.removeItem(SESSION_KEY); }catch(e){}
 }
 async function loadStoredSession(){
   try{
-    const r = await window.storage.get(SESSION_KEY, false);
-    if(r && r.value) return JSON.parse(r.value);
+    const raw = localStorage.getItem(SESSION_KEY);
+    if(raw) return JSON.parse(raw);
   }catch(e){}
   return null;
 }
