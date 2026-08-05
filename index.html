@@ -216,6 +216,14 @@
     cursor:pointer;padding:0 4px;line-height:1;
   }
   .movebtns button:disabled{ opacity:0.2; }
+  .draghandle{
+    flex:none;width:26px;height:34px;display:flex;align-items:center;justify-content:center;
+    color:var(--ink-soft);font-size:16px;cursor:grab;touch-action:none;user-select:none;
+  }
+  .taskrow.dragging{
+    opacity:0.85;box-shadow:0 4px 12px rgba(0,0,0,0.15);position:relative;z-index:5;
+    background:var(--paper-card);
+  }
   .empty-tasks{ font-size:13px;color:var(--ink-soft);font-style:italic;margin-top:16px; }
 
   /* ---------- Modales (détail tâche / pomodoro) ---------- */
@@ -471,7 +479,7 @@
         <h3>Tâches détectées (/T … /tt)</h3>
         <ul id="taskList"></ul>
         <div class="empty" id="taskEmpty">Aucune pour l'instant.</div>
-        <div class="note">Aperçu seulement — la création automatique dans l'onglet Tâches n'est pas encore branchée.</div>
+        <div class="note">Ces tâches seront créées automatiquement dans l'onglet Tâches à la sauvegarde (aucun lien après coup).</div>
       </div>
     </main>
   </section>
@@ -661,6 +669,7 @@ const MONTH_NAMES = ["janvier","février","mars","avril","mai","juin","juillet",
 let offset = 0;
 let saveTimer = null;
 let currentRowId = null;
+let currentProcessedTags = [];
 let session = null;
 let authMode = "login";
 
@@ -942,9 +951,45 @@ async function saveCurrent(){
     }
     setStatus('Enregistré');
     setTimeout(() => setStatus(''), 1200);
+    await createTasksFromTags(data);
   }catch(err){
     console.error('Erreur de sauvegarde', err);
     setStatus('Échec de la sauvegarde — vérifie ta connexion', true);
+  }
+}
+
+function extractTagTexts(data){
+  const allText = [data.quicknote, data.allday, ...SECTIONS.map(s => data[s.key])].join('\n');
+  const re = /\/T([\s\S]*?)\/tt/gi;
+  const found = [];
+  let m;
+  while((m = re.exec(allText)) !== null){
+    const t = m[1].trim();
+    if(t) found.push(t);
+  }
+  return found;
+}
+
+async function createTasksFromTags(data){
+  const tags = extractTagTexts(data);
+  const newTags = tags.filter(t => !currentProcessedTags.includes(t));
+  if(newTags.length === 0) return;
+  try{
+    for(const title of newTags){
+      await apiFetch('tasks', {
+        method:'POST', headers:{'Prefer':'return=minimal'},
+        body: JSON.stringify({ title, position: Date.now() })
+      });
+      currentProcessedTags.push(title);
+    }
+    if(currentRowId){
+      await apiFetch(`journal_entries?id=eq.${currentRowId}`, {
+        method:'PATCH', headers:{'Prefer':'return=minimal'},
+        body: JSON.stringify({ task_tags_processed: currentProcessedTags })
+      });
+    }
+  }catch(err){
+    console.error('Échec de la création de tâche depuis une balise', err);
   }
 }
 
@@ -966,7 +1011,7 @@ async function loadDay(){
 
   setStatus('Chargement…');
   const entry_date = isoKey(d);
-  let data = { quicknote:'', allday:'', reveil:'', matin:'', am:'', diner:'', pm:'', souper:'', soiree:'', couche:'' };
+  let data = { quicknote:'', allday:'', reveil:'', matin:'', am:'', diner:'', pm:'', souper:'', soiree:'', couche:'', task_tags_processed:[] };
   currentRowId = null;
   try{
     const res = await apiFetch(`journal_entries?entry_date=eq.${entry_date}&select=*`);
@@ -980,6 +1025,7 @@ async function loadDay(){
     console.error(err);
     setStatus('Impossible de charger — vérifie ta connexion', true);
   }
+  currentProcessedTags = data.task_tags_processed || [];
 
   document.getElementById('quicknote').value = data.quicknote || '';
   document.getElementById('field-allday').value = data.allday || '';
@@ -1584,11 +1630,10 @@ function renderTasks(){
   ul.innerHTML = '';
   document.getElementById('emptyTasks').style.display = tasksCache.length === 0 ? 'block' : 'none';
 
-  const activeList = tasksCache.filter(t => !t.done);
-
   tasksCache.forEach((t) => {
     const li = document.createElement('li');
-    li.className = 'taskrow' + (t.done ? ' done' : '');
+    li.className = 'taskrow' + (t.done ? ' done' : '') + (!t.done ? ' draggable-row' : '');
+    li.dataset.taskId = t.id;
 
     const check = document.createElement('div');
     check.className = 'checkcircle' + (t.done ? ' checked' : '');
@@ -1614,26 +1659,18 @@ function renderTasks(){
     tomato.title = 'Démarrer un pomodoro';
     tomato.addEventListener('click', (e) => { e.stopPropagation(); openPomodoro(t); });
 
-    const move = document.createElement('div');
-    move.className = 'movebtns';
-    if(!t.done){
-      const idx = activeList.indexOf(t);
-      const up = document.createElement('button');
-      up.textContent = '▲';
-      up.disabled = idx <= 0;
-      up.addEventListener('click', (e) => { e.stopPropagation(); moveTask(t, -1); });
-      const down = document.createElement('button');
-      down.textContent = '▼';
-      down.disabled = idx === activeList.length - 1;
-      down.addEventListener('click', (e) => { e.stopPropagation(); moveTask(t, 1); });
-      move.appendChild(up);
-      move.appendChild(down);
-    }
-
     li.appendChild(check);
     li.appendChild(body);
-    li.appendChild(move);
     li.appendChild(tomato);
+
+    if(!t.done){
+      const handle = document.createElement('div');
+      handle.className = 'draghandle';
+      handle.textContent = '⋮⋮';
+      attachDragHandlers(handle, li);
+      li.appendChild(handle);
+    }
+
     ul.appendChild(li);
   });
 }
@@ -1674,21 +1711,70 @@ async function toggleTaskDone(t){
   }
 }
 
-async function moveTask(t, dir){
-  const activeList = tasksCache.filter(x => !x.done);
-  const idx = activeList.indexOf(t);
-  const swapWith = activeList[idx + dir];
-  if(!swapWith) return;
-  const posA = t.position, posB = swapWith.position;
+/* ---- Glisser-déposer (souris ET tactile, via Pointer Events) ---- */
+let dragState = null;
+
+function attachDragHandlers(handleEl, li){
+  handleEl.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const container = document.getElementById('taskListUl');
+    dragState = { li, startY: e.clientY, container, pointerId: e.pointerId };
+    li.classList.add('dragging');
+    try{ handleEl.setPointerCapture(e.pointerId); }catch(err){}
+  });
+
+  handleEl.addEventListener('pointermove', (e) => {
+    if(!dragState || dragState.li !== li) return;
+    const deltaY = e.clientY - dragState.startY;
+    li.style.transform = `translateY(${deltaY}px)`;
+
+    const rows = [...dragState.container.querySelectorAll('.taskrow')];
+    const currentIndex = rows.indexOf(li);
+    const liRect = li.getBoundingClientRect();
+    const liMidY = liRect.top + liRect.height / 2;
+
+    rows.forEach((row, idx) => {
+      if(row === li) return;
+      const rect = row.getBoundingClientRect();
+      const rowMid = rect.top + rect.height / 2;
+      if(idx < currentIndex && liMidY < rowMid){
+        dragState.container.insertBefore(li, row);
+        dragState.startY = e.clientY;
+        li.style.transform = '';
+      } else if(idx > currentIndex && liMidY > rowMid){
+        dragState.container.insertBefore(li, row.nextSibling);
+        dragState.startY = e.clientY;
+        li.style.transform = '';
+      }
+    });
+  });
+
+  const endDrag = async (e) => {
+    if(!dragState || dragState.li !== li) return;
+    li.classList.remove('dragging');
+    li.style.transform = '';
+    try{ handleEl.releasePointerCapture(dragState.pointerId); }catch(err){}
+    dragState = null;
+    await persistNewOrder();
+  };
+  handleEl.addEventListener('pointerup', endDrag);
+  handleEl.addEventListener('pointercancel', endDrag);
+}
+
+async function persistNewOrder(){
+  const rows = [...document.getElementById('taskListUl').querySelectorAll('.taskrow.draggable-row')];
+  const updates = rows.map((row, idx) => ({ id: row.dataset.taskId, position: idx }));
   try{
-    await Promise.all([
-      apiFetch(`tasks?id=eq.${t.id}`, { method:'PATCH', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({position: posB}) }),
-      apiFetch(`tasks?id=eq.${swapWith.id}`, { method:'PATCH', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({position: posA}) })
-    ]);
-    loadTasks();
+    await Promise.all(updates.map(u =>
+      apiFetch(`tasks?id=eq.${u.id}`, {
+        method:'PATCH', headers:{'Prefer':'return=minimal'},
+        body: JSON.stringify({ position: u.position })
+      })
+    ));
+    await loadTasks();
   }catch(err){
     console.error(err);
-    setTasksStatus('Échec du déplacement', true);
+    setTasksStatus('Échec du réordonnancement', true);
   }
 }
 
