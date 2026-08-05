@@ -1096,7 +1096,7 @@ document.getElementById('icloudToggle').addEventListener('click', () => {
 async function callIcloudFunction(action, extra){
   const ok = await ensureValidSession();
   if(!ok) throw new Error("session expirée");
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/icloud-events`, {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/smart-worker`, {
     method: "POST",
     headers: {
       "Authorization": "Bearer " + session.access_token,
