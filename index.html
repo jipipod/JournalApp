@@ -404,6 +404,27 @@
   }
   .icloud-cal-list{ margin-top:8px; }
   .icloud-cal-row{ display:flex;align-items:center;gap:8px;font-size:13.5px;margin-bottom:4px; }
+
+  /* ---------- Événements récurrents (cours) ---------- */
+  .recur-item{
+    border:1px solid var(--rule);border-radius:10px;padding:8px 10px;margin-bottom:8px;
+    background:#fff;font-size:13px;
+  }
+  .recur-item-top{ display:flex;justify-content:space-between;align-items:flex-start;gap:8px; }
+  .recur-item .rtitle{ font-weight:600; }
+  .recur-item .rmeta{ color:var(--ink-soft);font-size:12px;margin-top:2px; }
+  .recur-item .delrecur{ border:none;background:none;color:var(--error);font-size:16px;cursor:pointer;flex:none; }
+  .exception-chips{ display:flex;gap:5px;flex-wrap:wrap;margin-top:6px; }
+  .exception-chip{
+    background:var(--paper);border:1px solid var(--rule);border-radius:12px;
+    padding:2px 8px;font-size:11px;color:var(--ink-soft);display:flex;align-items:center;gap:4px;
+  }
+  .exception-chip button{ border:none;background:none;color:var(--error);cursor:pointer;font-size:11px;padding:0; }
+  .addexception-row{ display:flex;gap:6px;margin-top:6px; }
+  .addexception-row input{ flex:1;padding:5px 8px;font-size:12px;border:1px solid var(--rule);border-radius:6px; }
+  .addexception-row button{
+    border:1px solid var(--rule);background:#fff;border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;
+  }
 </style>
 </head>
 <body>
@@ -463,6 +484,29 @@
           <div class="icloud-cal-list" id="icloudCalList"></div>
           <button id="icloudSaveCalsBtn" style="display:none;">Enregistrer les calendriers choisis</button>
           <button id="syncIcloudBtn" style="display:none;">Synchroniser mon horaire (iCloud)</button>
+        </div>
+      </div>
+
+      <div class="icloudbox collapsed" id="recurBox">
+        <div class="icloud-toggle" id="recurToggle">
+          <span>Cours et rendez-vous récurrents</span>
+          <span id="recurChevron">▸</span>
+        </div>
+        <div class="icloud-details">
+          <div id="recurList"></div>
+          <label for="recurTitle">Titre</label>
+          <input type="text" id="recurTitle" placeholder="Ex : Cours de mathématiques">
+          <label>Jours</label>
+          <div class="daychips" id="recurDays"></div>
+          <label for="recurStart">Heure de début</label>
+          <input type="time" id="recurStart">
+          <label for="recurEnd">Heure de fin (optionnel)</label>
+          <input type="time" id="recurEnd">
+          <label for="recurDateStart">Date de début</label>
+          <input type="date" id="recurDateStart">
+          <label for="recurDateEnd">Date de fin (optionnel — vide = indéfiniment)</label>
+          <input type="date" id="recurDateEnd">
+          <button id="recurAddBtn">Ajouter</button>
         </div>
       </div>
 
@@ -793,10 +837,11 @@ document.getElementById('authSubmit').addEventListener('click', async () => {
   }
 });
 
-function enterApp(){
+async function enterApp(){
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('appRoot').style.display = 'block';
   document.getElementById('tabbar').style.display = 'flex';
+  await loadRecurringEvents();
   loadDay();
 }
 
@@ -1035,6 +1080,7 @@ async function loadDay(){
     if(el) el.value = data[sec.key] || '';
   });
   refreshTaskPreview();
+  if(!locked) applyRecurringEventsForDay(d, entry_date);
   if(googleAccessToken && !locked) syncGoogleEventsForCurrentDay();
 }
 
@@ -1042,6 +1088,181 @@ document.getElementById('prevBtn').addEventListener('click', () => { offset -= 1
 document.getElementById('nextBtn').addEventListener('click', () => { if(offset < 0){ offset += 1; loadDay(); } });
 document.getElementById('quicknote').addEventListener('input', onFieldInput);
 document.getElementById('field-allday').addEventListener('input', onFieldInput);
+
+/* ================= Événements récurrents (cours, rendez-vous fixes) ================= */
+let recurEventsCache = [];
+let newRecurDays = [1,3]; // lundi/mercredi par défaut, ajustable
+
+document.getElementById('recurToggle').addEventListener('click', () => {
+  document.getElementById('recurBox').classList.toggle('collapsed');
+});
+
+function renderNewRecurDayChips(){
+  const el = document.getElementById('recurDays');
+  el.innerHTML = '';
+  DAY_CHIP_LABELS.forEach((lbl, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'daychip' + (newRecurDays.includes(i) ? ' on' : '');
+    chip.textContent = lbl;
+    chip.addEventListener('click', () => {
+      const idx = newRecurDays.indexOf(i);
+      if(idx >= 0) newRecurDays.splice(idx,1); else newRecurDays.push(i);
+      renderNewRecurDayChips();
+    });
+    el.appendChild(chip);
+  });
+}
+renderNewRecurDayChips();
+
+async function loadRecurringEvents(){
+  try{
+    const res = await apiFetch(`recurring_events?active=eq.true&order=created_at.asc`);
+    recurEventsCache = await res.json();
+    renderRecurList();
+  }catch(err){
+    console.error('Échec du chargement des événements récurrents', err);
+  }
+}
+
+function renderRecurList(){
+  const container = document.getElementById('recurList');
+  container.innerHTML = '';
+  recurEventsCache.forEach(r => {
+    const days = DAY_COLS.filter(c => r[c]).map(c => DAY_CHIP_LABELS[DAY_COLS.indexOf(c)]).join(', ');
+    const item = document.createElement('div');
+    item.className = 'recur-item';
+
+    const top = document.createElement('div');
+    top.className = 'recur-item-top';
+    const info = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'rtitle';
+    title.textContent = r.title;
+    const meta = document.createElement('div');
+    meta.className = 'rmeta';
+    const timeRange = r.end_time ? `${r.start_time.slice(0,5)}–${r.end_time.slice(0,5)}` : r.start_time.slice(0,5);
+    const dateRange = r.date_end ? `${r.date_start} → ${r.date_end}` : `dès ${r.date_start}`;
+    meta.textContent = `${days} · ${timeRange} · ${dateRange}`;
+    info.appendChild(title);
+    info.appendChild(meta);
+    const del = document.createElement('button');
+    del.className = 'delrecur';
+    del.textContent = '✕';
+    del.addEventListener('click', () => deleteRecurringEvent(r.id));
+    top.appendChild(info);
+    top.appendChild(del);
+    item.appendChild(top);
+
+    const chips = document.createElement('div');
+    chips.className = 'exception-chips';
+    (r.exceptions || []).forEach(dateStr => {
+      const chip = document.createElement('div');
+      chip.className = 'exception-chip';
+      const span = document.createElement('span');
+      span.textContent = dateStr;
+      const rm = document.createElement('button');
+      rm.textContent = '✕';
+      rm.addEventListener('click', () => removeException(r, dateStr));
+      chip.appendChild(span);
+      chip.appendChild(rm);
+      chips.appendChild(chip);
+    });
+    item.appendChild(chips);
+
+    const addRow = document.createElement('div');
+    addRow.className = 'addexception-row';
+    const dateInput = document.createElement('input');
+    dateInput.type = 'date';
+    const addBtn = document.createElement('button');
+    addBtn.textContent = 'Exception';
+    addBtn.addEventListener('click', () => {
+      if(dateInput.value) addException(r, dateInput.value);
+    });
+    addRow.appendChild(dateInput);
+    addRow.appendChild(addBtn);
+    item.appendChild(addRow);
+
+    container.appendChild(item);
+  });
+}
+
+document.getElementById('recurAddBtn').addEventListener('click', async () => {
+  const title = document.getElementById('recurTitle').value.trim();
+  const startTime = document.getElementById('recurStart').value;
+  const endTime = document.getElementById('recurEnd').value;
+  const dateStart = document.getElementById('recurDateStart').value;
+  const dateEnd = document.getElementById('recurDateEnd').value;
+  if(!title || !startTime || !dateStart || newRecurDays.length === 0){
+    alert('Titre, au moins un jour, heure de début et date de début sont requis.');
+    return;
+  }
+  const row = {
+    title, start_time: startTime, end_time: endTime || null,
+    date_start: dateStart, date_end: dateEnd || null, exceptions: []
+  };
+  DAY_COLS.forEach((c, i) => row[c] = newRecurDays.includes(i));
+  try{
+    await apiFetch('recurring_events', {
+      method:'POST', headers:{'Prefer':'return=minimal'}, body: JSON.stringify(row)
+    });
+    document.getElementById('recurTitle').value = '';
+    document.getElementById('recurStart').value = '';
+    document.getElementById('recurEnd').value = '';
+    document.getElementById('recurDateStart').value = '';
+    document.getElementById('recurDateEnd').value = '';
+    await loadRecurringEvents();
+    loadDay();
+  }catch(err){
+    console.error(err);
+    alert('Échec de l\'ajout.');
+  }
+});
+
+async function deleteRecurringEvent(id){
+  try{
+    await apiFetch(`recurring_events?id=eq.${id}`, {
+      method:'PATCH', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({ active:false })
+    });
+    await loadRecurringEvents();
+  }catch(err){ console.error(err); }
+}
+
+async function addException(r, dateStr){
+  const updated = [...(r.exceptions || []), dateStr];
+  try{
+    await apiFetch(`recurring_events?id=eq.${r.id}`, {
+      method:'PATCH', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({ exceptions: updated })
+    });
+    await loadRecurringEvents();
+  }catch(err){ console.error(err); }
+}
+
+async function removeException(r, dateStr){
+  const updated = (r.exceptions || []).filter(d => d !== dateStr);
+  try{
+    await apiFetch(`recurring_events?id=eq.${r.id}`, {
+      method:'PATCH', headers:{'Prefer':'return=minimal'}, body: JSON.stringify({ exceptions: updated })
+    });
+    await loadRecurringEvents();
+  }catch(err){ console.error(err); }
+}
+
+function applyRecurringEventsForDay(d, entry_date){
+  const dayCol = DAY_COLS[d.getDay()];
+  const applicable = recurEventsCache.filter(r =>
+    r[dayCol] &&
+    entry_date >= r.date_start &&
+    (!r.date_end || entry_date <= r.date_end) &&
+    !(r.exceptions || []).includes(entry_date)
+  );
+  if(applicable.length === 0) return;
+  const normalized = applicable.map(r => ({
+    summary: r.end_time ? `${r.title} (jusqu'à ${r.end_time.slice(0,5)})` : r.title,
+    startISO: `${entry_date}T${r.start_time}`,
+    allDay: false
+  }));
+  applyCalendarEventsToJournal(normalized);
+}
 
 /* ================= Google Calendar ================= */
 const GOOGLE_CLIENT_ID = "192503405171-dk6usfo21n5o2temssbjjhhfs812nua3.apps.googleusercontent.com";
