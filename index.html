@@ -1718,41 +1718,31 @@ function attachDragHandlers(handleEl, li){
   handleEl.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     const container = document.getElementById('taskListUl');
-    dragState = { li, startY: e.clientY, container, pointerId: e.pointerId };
+    dragState = { li, container, pointerId: e.pointerId };
     li.classList.add('dragging');
     try{ handleEl.setPointerCapture(e.pointerId); }catch(err){}
   });
 
   handleEl.addEventListener('pointermove', (e) => {
     if(!dragState || dragState.li !== li) return;
-    const deltaY = e.clientY - dragState.startY;
-    li.style.transform = `translateY(${deltaY}px)`;
-
-    const rows = [...dragState.container.querySelectorAll('.taskrow')];
-    const currentIndex = rows.indexOf(li);
-    const liRect = li.getBoundingClientRect();
-    const liMidY = liRect.top + liRect.height / 2;
-
-    rows.forEach((row, idx) => {
-      if(row === li) return;
+    const rows = [...dragState.container.querySelectorAll('.taskrow')].filter(r => r !== li);
+    const cursorY = e.clientY;
+    let target = null;
+    for(const row of rows){
       const rect = row.getBoundingClientRect();
-      const rowMid = rect.top + rect.height / 2;
-      if(idx < currentIndex && liMidY < rowMid){
-        dragState.container.insertBefore(li, row);
-        dragState.startY = e.clientY;
-        li.style.transform = '';
-      } else if(idx > currentIndex && liMidY > rowMid){
-        dragState.container.insertBefore(li, row.nextSibling);
-        dragState.startY = e.clientY;
-        li.style.transform = '';
-      }
-    });
+      const mid = rect.top + rect.height / 2;
+      if(cursorY < mid){ target = row; break; }
+    }
+    if(target){
+      if(target.previousElementSibling !== li) dragState.container.insertBefore(li, target);
+    } else {
+      if(dragState.container.lastElementChild !== li) dragState.container.appendChild(li);
+    }
   });
 
-  const endDrag = async (e) => {
+  const endDrag = async () => {
     if(!dragState || dragState.li !== li) return;
     li.classList.remove('dragging');
-    li.style.transform = '';
     try{ handleEl.releasePointerCapture(dragState.pointerId); }catch(err){}
     dragState = null;
     await persistNewOrder();
