@@ -695,6 +695,8 @@
 const SUPABASE_URL = "https://oganxzybmbapacijjcie.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_ja0QHYTDJqK0euwvfFkoXw_RQUuIfvV";
 const SESSION_KEY = "supabase-session";
+const DAY_COLS = ['dim','lun','mar','mer','jeu','ven','sam'];
+const DAY_CHIP_LABELS = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
 
 const SECTIONS = [
   {key:"reveil", label:"Réveil"},
@@ -1519,8 +1521,6 @@ document.querySelectorAll('.tabbtn').forEach(btn => {
 });
 
 /* ================= Horaire ================= */
-const DAY_COLS = ['dim','lun','mar','mer','jeu','ven','sam'];
-const DAY_CHIP_LABELS = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
 const DEFAULT_ACTIVITIES = [
   { label:"Étirement général", days:[0,1,2,3,4,5,6] },
   { label:"Pushup", days:[0,2,4,6] },
