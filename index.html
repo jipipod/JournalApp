@@ -102,6 +102,15 @@
   }
   .quicknote:focus{outline:none;border-bottom-color:var(--accent);}
 
+  .alldayline{
+    width:100%;border:none;background:transparent;
+    font-family:Georgia,serif;font-style:normal;font-size:16px;
+    color:var(--ink);border-bottom:1px solid var(--rule);
+    padding:6px 2px 10px;resize:none;
+  }
+  .alldayline:focus{outline:none;border-bottom-color:var(--accent);}
+  .alldayline:empty::placeholder{ color:var(--ink-soft); }
+
   .locked-banner{
     margin-top:14px;background:var(--accent-soft);color:var(--accent);
     font-size:12.5px;font-weight:600;padding:8px 12px;border-radius:8px;
@@ -450,6 +459,7 @@
       </div>
 
       <textarea class="quicknote" id="quicknote" rows="1" placeholder="Une ligne pour aujourd'hui…"></textarea>
+      <textarea class="alldayline" id="field-allday" rows="1" placeholder="Événements toute la journée…"></textarea>
 
       <div id="lockedBanner" class="locked-banner" style="display:none;">
         Journée archivée — lecture seule.
@@ -874,7 +884,10 @@ function scheduleSave(){
 }
 
 function collectData(){
-  const data = { quicknote: document.getElementById('quicknote').value };
+  const data = {
+    quicknote: document.getElementById('quicknote').value,
+    allday: document.getElementById('field-allday').value
+  };
   SECTIONS.forEach(sec => {
     const el = document.getElementById('field-' + sec.key);
     data[sec.key] = el ? el.value : '';
@@ -953,7 +966,7 @@ async function loadDay(){
 
   setStatus('Chargement…');
   const entry_date = isoKey(d);
-  let data = { quicknote:'', reveil:'', matin:'', am:'', diner:'', pm:'', souper:'', soiree:'', couche:'' };
+  let data = { quicknote:'', allday:'', reveil:'', matin:'', am:'', diner:'', pm:'', souper:'', soiree:'', couche:'' };
   currentRowId = null;
   try{
     const res = await apiFetch(`journal_entries?entry_date=eq.${entry_date}&select=*`);
@@ -969,6 +982,8 @@ async function loadDay(){
   }
 
   document.getElementById('quicknote').value = data.quicknote || '';
+  document.getElementById('field-allday').value = data.allday || '';
+  document.getElementById('field-allday').disabled = locked;
   SECTIONS.forEach(sec => {
     const el = document.getElementById('field-' + sec.key);
     if(el) el.value = data[sec.key] || '';
@@ -980,6 +995,7 @@ async function loadDay(){
 document.getElementById('prevBtn').addEventListener('click', () => { offset -= 1; loadDay(); });
 document.getElementById('nextBtn').addEventListener('click', () => { if(offset < 0){ offset += 1; loadDay(); } });
 document.getElementById('quicknote').addEventListener('input', onFieldInput);
+document.getElementById('field-allday').addEventListener('input', onFieldInput);
 
 /* ================= Google Calendar ================= */
 const GOOGLE_CLIENT_ID = "192503405171-dk6usfo21n5o2temssbjjhhfs812nua3.apps.googleusercontent.com";
@@ -1067,8 +1083,7 @@ function applyCalendarEventsToJournal(events){
   const allDayLines = [];
   events.forEach(ev => {
     if(ev.allDay){
-      const line = `(Toute la journée) ${ev.summary}`;
-      allDayLines.push(line);
+      allDayLines.push(ev.summary);
       return;
     }
     const start = new Date(ev.startISO);
@@ -1081,11 +1096,11 @@ function applyCalendarEventsToJournal(events){
     else if(h >= 17 && h < 22) buckets.soiree.push(line);
   });
   let changed = false;
-  const matinEl = document.getElementById('field-matin');
-  if(matinEl){
+  const alldayEl = document.getElementById('field-allday');
+  if(alldayEl){
     allDayLines.forEach(line => {
-      if(!matinEl.value.includes(line)){
-        matinEl.value = line + (matinEl.value ? '\n' + matinEl.value : '');
+      if(!alldayEl.value.includes(line)){
+        alldayEl.value = alldayEl.value ? alldayEl.value + ' · ' + line : line;
         changed = true;
       }
     });
@@ -1872,8 +1887,8 @@ async function runArchiveSearch(){
     ]);
 
     renderResultGroup('Journal', journalRows.slice(0,15), (r) => {
-      const champs = ['quicknote','reveil','matin','am','diner','pm','souper','soiree','couche'];
-      const champLabels = {quicknote:'Note',reveil:'Réveil',matin:'Matin',am:'Am',diner:'Dîner',pm:'Pm',souper:'Souper',soiree:'Soirée',couche:'Couché'};
+      const champs = ['quicknote','allday','reveil','matin','am','diner','pm','souper','soiree','couche'];
+      const champLabels = {quicknote:'Note',allday:'Toute la journée',reveil:'Réveil',matin:'Matin',am:'Am',diner:'Dîner',pm:'Pm',souper:'Souper',soiree:'Soirée',couche:'Couché'};
       const hit = champs.find(c => (r[c]||'').toLowerCase().includes(kw.toLowerCase()));
       const extrait = hit ? `${champLabels[hit]} : ${r[hit]}` : '';
       return { date: r.entry_date, text: extrait };
@@ -1897,7 +1912,7 @@ async function runArchiveSearch(){
 }
 
 async function searchJournal(kw){
-  const cols = ['quicknote','reveil','matin','am','diner','pm','souper','soiree','couche'];
+  const cols = ['quicknote','allday','reveil','matin','am','diner','pm','souper','soiree','couche'];
   const res = await apiFetch(`journal_entries?order=entry_date.desc&limit=400&select=entry_date,${cols.join(',')}`);
   const rows = await res.json();
   const kwLower = kw.toLowerCase();
