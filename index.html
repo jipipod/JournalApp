@@ -1580,11 +1580,15 @@ function horDateForOffset(off){
 
 async function loadHoraireDay(){
   const d = horDateForOffset(horOffset);
-  const locked = horOffset < 0;
+  const locked = horOffset <= -3;
   const entry_date = isoKey(d);
 
   document.getElementById('horDateHead').textContent = formatHeading(d);
-  document.getElementById('horNavLabel').textContent = horOffset === 0 ? "Aujourd'hui" : "Archivé";
+  document.getElementById('horNavLabel').textContent =
+    horOffset === 0 ? "Aujourd'hui" :
+    horOffset === -1 ? "Hier" :
+    horOffset === -2 ? "Avant-hier" :
+    "Archivé";
   document.getElementById('horLockedBanner').style.display = locked ? 'block' : 'none';
   document.getElementById('horNextBtn').disabled = horOffset >= 0;
 
