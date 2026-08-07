@@ -844,6 +844,7 @@ async function enterApp(){
   document.getElementById('appRoot').style.display = 'block';
   document.getElementById('tabbar').style.display = 'flex';
   await loadRecurringEvents();
+  await loadIcloudStatus();
   loadDay();
 }
 
@@ -1083,6 +1084,7 @@ async function loadDay(){
   });
   refreshTaskPreview();
   if(!locked) applyRecurringEventsForDay(d, entry_date);
+  if(icloudConnected && !locked) syncIcloudEventsForCurrentDay();
   if(googleAccessToken && !locked) syncGoogleEventsForCurrentDay();
 }
 
@@ -1429,6 +1431,24 @@ async function saveIcloudCredentials(email, password){
 }
 
 let icloudCalendarsFound = [];
+let icloudConnected = false;
+
+async function loadIcloudStatus(){
+  try{
+    const res = await apiFetch(`calendar_credentials?select=icloud_email,icloud_calendars`);
+    const rows = await res.json();
+    const row = rows && rows[0];
+    if(row && row.icloud_email && (row.icloud_calendars || []).length > 0){
+      icloudConnected = true;
+      icloudCalendarsFound = row.icloud_calendars;
+      document.getElementById('icloudEmail').value = row.icloud_email;
+      document.getElementById('icloudStatus').textContent = 'connecté';
+      document.getElementById('syncIcloudBtn').style.display = 'inline-block';
+    }
+  }catch(err){
+    console.error('Échec de la vérification du statut iCloud', err);
+  }
+}
 
 document.getElementById('icloudConnectBtn').addEventListener('click', async () => {
   const email = document.getElementById('icloudEmail').value.trim();
