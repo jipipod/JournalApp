@@ -1673,7 +1673,7 @@ async function toggleScheduleEntry(t, newDone, comment){
   const d = horDateForOffset(horOffset);
   const entry_date = isoKey(d);
   try{
-    await apiFetch('schedule_entries', {
+    await apiFetch('schedule_entries?on_conflict=user_id,template_id,entry_date', {
       method:'POST',
       headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({ template_id:t.id, entry_date, done:newDone, comment })
