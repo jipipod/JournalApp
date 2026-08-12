@@ -1360,7 +1360,7 @@ function applyCalendarEventsToJournal(events){
     const start = new Date(ev.startISO);
     if(isNaN(start.getTime())) return;
     const h = start.getHours();
-    const timeLabel = start.toLocaleTimeString('fr-CA', {hour:'2-digit', minute:'2-digit'});
+    const timeLabel = String(start.getHours()).padStart(2,'0') + ':' + String(start.getMinutes()).padStart(2,'0');
     const line = `${timeLabel} ${ev.summary}`;
     if(h >= 6 && h < 12) buckets.am.push(line);
     else if(h >= 12 && h < 17) buckets.pm.push(line);
@@ -1857,8 +1857,16 @@ async function openArchivedTasks(){
     rows.forEach(t => {
       const row = document.createElement('div');
       row.className = 'archivedtaskrow';
-      const done = t.completed_at ? new Date(t.completed_at).toLocaleDateString('fr-CA') : '';
-      row.innerHTML = `<span class="t">${t.title}</span> — complétée le ${done}`;
+      let done = '';
+      if(t.completed_at){
+        const dt = new Date(t.completed_at);
+        done = `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}/${dt.getFullYear()}`;
+      }
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 't';
+      titleSpan.textContent = t.title;
+      row.appendChild(titleSpan);
+      row.appendChild(document.createTextNode(' — complétée le ' + done));
       list.appendChild(row);
     });
   }catch(err){
