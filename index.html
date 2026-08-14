@@ -1688,7 +1688,25 @@ async function toggleScheduleEntry(t, newDone, comment){
 let schedSaveTimer = null;
 function scheduleCommentSave(t, done, comment){
   clearTimeout(schedSaveTimer);
-  schedSaveTimer = setTimeout(() => toggleScheduleEntry(t, done, comment), 700);
+  schedSaveTimer = setTimeout(() => saveScheduleComment(t, done, comment), 700);
+}
+
+async function saveScheduleComment(t, done, comment){
+  const d = horDateForOffset(horOffset);
+  const entry_date = isoKey(d);
+  try{
+    await apiFetch('schedule_entries?on_conflict=user_id,template_id,entry_date', {
+      method:'POST',
+      headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ template_id:t.id, entry_date, done, comment })
+    });
+    const idx = scheduleEntriesCache.findIndex(e => e.template_id === t.id);
+    if(idx >= 0) scheduleEntriesCache[idx].comment = comment;
+    else scheduleEntriesCache.push({ template_id:t.id, entry_date, done, comment });
+  }catch(err){
+    console.error(err);
+    setHorStatus('Échec de la sauvegarde du commentaire', true);
+  }
 }
 
 document.getElementById('horPrevBtn').addEventListener('click', () => { horOffset -= 1; loadHoraireDay(); });
