@@ -338,6 +338,16 @@
     border:1px dashed var(--rule);border-radius:10px;padding:10px 12px;margin-top:6px;
   }
 
+
+  .prog-item{ border:1px solid var(--rule);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:#fff; }
+  .prog-item .prog-meta{ font-size:12px;color:var(--ink-soft);margin-top:2px; }
+  .prog-actions{ display:flex;gap:10px;margin-top:6px; }
+  .prog-actions button{ border:none;background:none;color:var(--accent);font-size:13px;cursor:pointer;padding:0;text-decoration:underline; }
+  .prog-actions button.danger{ color:var(--error); }
+  .prog-week{ border:1px solid var(--rule);border-radius:10px;padding:8px 10px;margin-bottom:8px;background:#fff; }
+  .prog-week-top{ display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600; }
+  .prog-badge{ font-size:11px;color:var(--accent);background:var(--accent-soft);border-radius:8px;padding:1px 6px;margin-left:6px;font-weight:600; }
+
   /* ---------- Archives / recherche ---------- */
   .search-row{ display:flex;gap:8px;margin-top:14px; }
   .search-row input{
@@ -570,6 +580,7 @@
       <div id="schedRows"></div>
       <div class="empty-tasks" id="horEmpty" style="display:none;">Aucune activité prévue ce jour-là.</div>
       <button class="manage-link" id="manageActivitiesBtn">Modifier mes activités…</button>
+      <button class="manage-link" id="manageProgramsBtn" style="display:block;margin-top:8px;">Programmes…</button>
     </main>
   </section>
   <section id="panel-archives" class="tabpanel">
@@ -617,6 +628,34 @@
     <h2>Tâches archivées</h2>
     <div id="archivedTasksList"></div>
     <div class="chat-empty" id="archivedTasksEmpty" style="display:none;">Aucune tâche archivée pour l'instant.</div>
+  </div>
+</div>
+
+<!-- Programmes (plusieurs semaines) -->
+<div class="modal-overlay" id="programOverlay" style="display:none;">
+  <div class="modal-sheet">
+    <button class="modal-close" id="programClose">✕</button>
+    <h2>Mes programmes</h2>
+    <div id="programListView">
+      <div id="programList"></div>
+      <div class="modal-actions"><button id="programNewBtn" style="background:var(--accent);color:#fff;">Nouveau programme</button></div>
+    </div>
+    <div id="programEditView" style="display:none;">
+      <label for="progTitle">Nom du programme</label>
+      <input type="text" id="progTitle" placeholder="Ex. Programme de course">
+      <label for="progStart" style="margin-top:8px;display:block;">Date de début</label>
+      <input type="date" id="progStart">
+      <div id="progEnd" style="font-size:13px;color:var(--ink-soft);margin:6px 0 10px;"></div>
+      <div id="progWeeks"></div>
+      <div class="modal-actions">
+        <button id="progAddWeek">+ Ajouter une semaine</button>
+      </div>
+      <div class="modal-actions">
+        <button id="progCancel">Annuler</button>
+        <button id="progSave" style="background:var(--accent);color:#fff;">Enregistrer</button>
+      </div>
+      <div class="status" id="progStatus">&nbsp;</div>
+    </div>
   </div>
 </div>
 
@@ -1026,7 +1065,7 @@ async function createTasksFromTags(data){
     for(const title of newTags){
       await apiFetch('tasks', {
         method:'POST', headers:{'Prefer':'return=minimal'},
-        body: JSON.stringify({ title, position: Date.now() })
+        body: JSON.stringify({ title, position: Math.floor(Date.now() / 1000) })
       });
       currentProcessedTags.push(title);
     }
@@ -1038,6 +1077,7 @@ async function createTasksFromTags(data){
     }
   }catch(err){
     console.error('Échec de la création de tâche depuis une balise', err);
+    setStatus('Une tâche détectée n\'a pas pu être créée', true);
   }
 }
 
@@ -1556,6 +1596,8 @@ const DEFAULT_ACTIVITIES = [
 let horOffset = 0;
 let templatesCache = [];
 let scheduleEntriesCache = [];
+let programsCache = [];
+let programEntriesCache = [];
 
 function setHorStatus(text, isError){
   const el = document.getElementById('horStatus');
@@ -1616,6 +1658,12 @@ async function loadHoraireDay(){
   try{
     const res = await apiFetch(`schedule_entries?entry_date=eq.${entry_date}&select=*`);
     scheduleEntriesCache = await res.json();
+    try{
+      programsCache = await (await apiFetch('programs?active=eq.true&select=*&order=date_start.asc')).json();
+      if(!Array.isArray(programsCache)) programsCache = [];
+      programEntriesCache = await (await apiFetch(`program_entries?entry_date=eq.${entry_date}&select=*`)).json();
+      if(!Array.isArray(programEntriesCache)) programEntriesCache = [];
+    }catch(e){ programsCache = []; programEntriesCache = []; }
     setHorStatus('');
   }catch(err){
     console.error(err);
@@ -1631,7 +1679,8 @@ function renderScheduleRows(d, locked){
   const applicable = templatesCache.filter(t => t[dayCol]);
   const container = document.getElementById('schedRows');
   container.innerHTML = '';
-  document.getElementById('horEmpty').style.display = applicable.length === 0 ? 'block' : 'none';
+  const progSessions = programSessionsForDate(d);
+  document.getElementById('horEmpty').style.display = (applicable.length === 0 && progSessions.length === 0) ? 'block' : 'none';
 
   applicable.forEach(t => {
     const existing = scheduleEntriesCache.find(e => e.template_id === t.id);
@@ -1667,7 +1716,244 @@ function renderScheduleRows(d, locked){
     row.appendChild(body);
     container.appendChild(row);
   });
+
+  progSessions.forEach(ps => {
+    const existing = programEntriesCache.find(e => e.program_id === ps.program.id);
+    const done = existing ? existing.done : false;
+    const comment = existing ? (existing.comment || '') : '';
+    const row = document.createElement('div');
+    row.className = 'schedrow' + (done ? ' done' : '');
+    const check = document.createElement('div');
+    check.className = 'schedcheck' + (done ? ' checked' : '');
+    if(!locked) check.addEventListener('click', () => toggleProgramEntry(ps.program, !done, comment));
+    const body = document.createElement('div');
+    body.className = 'schedbody';
+    const label = document.createElement('div');
+    label.className = 'schedlabel';
+    label.textContent = ps.program.title + (ps.note ? ' — ' + ps.note : '');
+    const badge = document.createElement('span');
+    badge.className = 'prog-badge';
+    badge.textContent = 'Sem. ' + ps.weekNum + '/' + ps.totalWeeks;
+    label.appendChild(badge);
+    body.appendChild(label);
+    const commentBox = document.createElement('textarea');
+    commentBox.className = 'schedcomment';
+    commentBox.rows = 1;
+    commentBox.placeholder = 'Commentaire (optionnel)';
+    commentBox.value = comment;
+    commentBox.disabled = locked;
+    commentBox.addEventListener('input', () => programCommentSave(ps.program, done, commentBox.value));
+    body.appendChild(commentBox);
+    row.appendChild(check);
+    row.appendChild(body);
+    container.appendChild(row);
+  });
 }
+
+/* ---- Programmes (sur plusieurs semaines) ---- */
+function parseISODate(str){
+  const [y,m,dd] = str.split('-').map(Number);
+  return new Date(y, m-1, dd);
+}
+function programEndDate(p){
+  const st = parseISODate(p.date_start);
+  st.setDate(st.getDate() + (p.weeks||[]).length*7 - 1);
+  return st;
+}
+function programSessionsForDate(d){
+  const out = [];
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  programsCache.forEach(p => {
+    const weeks = p.weeks || [];
+    if(!p.date_start || weeks.length === 0) return;
+    const diff = Math.round((day - parseISODate(p.date_start)) / 86400000);
+    if(diff < 0) return;
+    const wi = Math.floor(diff / 7);
+    if(wi >= weeks.length) return;
+    const w = weeks[wi];
+    if((w.days||[]).includes(day.getDay())){
+      out.push({ program:p, note:w.note||'', weekNum:wi+1, totalWeeks:weeks.length });
+    }
+  });
+  return out;
+}
+async function toggleProgramEntry(p, newDone, comment){
+  const entry_date = isoKey(horDateForOffset(horOffset));
+  try{
+    await apiFetch('program_entries?on_conflict=user_id,program_id,entry_date', {
+      method:'POST',
+      headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ program_id:p.id, entry_date, done:newDone, comment })
+    });
+    await loadHoraireDay();
+  }catch(err){
+    console.error(err);
+    setHorStatus('Échec de la mise à jour', true);
+  }
+}
+let progSaveTimer = null;
+function programCommentSave(p, done, comment){
+  clearTimeout(progSaveTimer);
+  progSaveTimer = setTimeout(async () => {
+    const entry_date = isoKey(horDateForOffset(horOffset));
+    try{
+      await apiFetch('program_entries?on_conflict=user_id,program_id,entry_date', {
+        method:'POST',
+        headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({ program_id:p.id, entry_date, done, comment })
+      });
+      const idx = programEntriesCache.findIndex(e => e.program_id === p.id);
+      if(idx >= 0) programEntriesCache[idx].comment = comment;
+      else programEntriesCache.push({ program_id:p.id, entry_date, done, comment });
+    }catch(err){
+      console.error(err);
+      setHorStatus('Échec de la sauvegarde du commentaire', true);
+    }
+  }, 700);
+}
+
+/* Éditeur de programmes */
+let editingProgram = null; // {id|null, title, date_start, weeks:[{days,note}]}
+function showProgramList(){
+  document.getElementById('programListView').style.display = 'block';
+  document.getElementById('programEditView').style.display = 'none';
+}
+async function openProgramModal(){
+  document.getElementById('programOverlay').style.display = 'flex';
+  showProgramList();
+  await renderProgramList();
+}
+async function renderProgramList(){
+  const el = document.getElementById('programList');
+  el.textContent = 'Chargement…';
+  let all = [];
+  try{
+    all = await (await apiFetch('programs?select=*&order=date_start.desc')).json();
+    if(!Array.isArray(all)) throw new Error('bad');
+  }catch(err){
+    el.textContent = 'Impossible de charger les programmes (la table existe-t-elle dans Supabase ?)';
+    return;
+  }
+  el.innerHTML = '';
+  if(all.length === 0){ el.textContent = 'Aucun programme pour le moment.'; return; }
+  all.forEach(p => {
+    const item = document.createElement('div');
+    item.className = 'prog-item';
+    const t = document.createElement('div');
+    t.style.fontWeight = '600';
+    t.textContent = p.title;
+    const meta = document.createElement('div');
+    meta.className = 'prog-meta';
+    const n = (p.weeks||[]).length;
+    meta.textContent = n ? `${p.date_start} → ${isoKey(programEndDate(p))} · ${n} semaine${n>1?'s':''}` : 'Aucune semaine';
+    const act = document.createElement('div');
+    act.className = 'prog-actions';
+    const ed = document.createElement('button'); ed.textContent = 'Modifier';
+    ed.addEventListener('click', () => openProgramEditor(p));
+    const del = document.createElement('button'); del.className = 'danger'; del.textContent = 'Supprimer';
+    del.addEventListener('click', async () => {
+      if(!confirm('Supprimer ce programme et son historique ?')) return;
+      try{
+        await apiFetch(`programs?id=eq.${p.id}`, { method:'DELETE', headers:{'Prefer':'return=minimal'} });
+      }catch(err){ console.error(err); }
+      renderProgramList();
+    });
+    act.appendChild(ed); act.appendChild(del);
+    item.appendChild(t); item.appendChild(meta); item.appendChild(act);
+    el.appendChild(item);
+  });
+}
+function openProgramEditor(p){
+  editingProgram = p
+    ? { id:p.id, title:p.title, date_start:p.date_start, weeks: JSON.parse(JSON.stringify(p.weeks||[])) }
+    : { id:null, title:'', date_start:isoKey(new Date()), weeks:[{days:[1,3,5], note:''}] };
+  document.getElementById('progTitle').value = editingProgram.title;
+  document.getElementById('progStart').value = editingProgram.date_start;
+  document.getElementById('progStatus').textContent = '\u00A0';
+  document.getElementById('programListView').style.display = 'none';
+  document.getElementById('programEditView').style.display = 'block';
+  renderProgramWeeks();
+}
+function updateProgramEndLabel(){
+  const el = document.getElementById('progEnd');
+  const n = editingProgram.weeks.length;
+  const st = document.getElementById('progStart').value;
+  if(!st || n === 0){ el.textContent = ''; return; }
+  el.textContent = 'Fin : ' + isoKey(programEndDate({date_start:st, weeks:editingProgram.weeks})) + ` (${n} semaine${n>1?'s':''})`;
+}
+function renderProgramWeeks(){
+  const el = document.getElementById('progWeeks');
+  el.innerHTML = '';
+  editingProgram.weeks.forEach((w, i) => {
+    const box = document.createElement('div');
+    box.className = 'prog-week';
+    const top = document.createElement('div');
+    top.className = 'prog-week-top';
+    const lbl = document.createElement('span'); lbl.textContent = 'Semaine ' + (i+1);
+    const del = document.createElement('button');
+    del.className = 'deltemplate'; del.textContent = '✕'; del.title = 'Retirer cette semaine';
+    del.addEventListener('click', () => { editingProgram.weeks.splice(i,1); renderProgramWeeks(); });
+    top.appendChild(lbl); top.appendChild(del);
+    const chips = document.createElement('div');
+    chips.className = 'daychips';
+    DAY_CHIP_LABELS.forEach((c, di) => {
+      const chip = document.createElement('div');
+      chip.className = 'daychip' + (w.days.includes(di) ? ' on' : '');
+      chip.textContent = c;
+      chip.addEventListener('click', () => {
+        const k = w.days.indexOf(di);
+        if(k >= 0) w.days.splice(k,1); else w.days.push(di);
+        renderProgramWeeks();
+      });
+      chips.appendChild(chip);
+    });
+    const note = document.createElement('input');
+    note.type = 'text'; note.placeholder = 'Note (ex. 25 min)'; note.value = w.note || '';
+    note.style.marginTop = '6px';
+    note.addEventListener('input', () => { w.note = note.value; });
+    box.appendChild(top); box.appendChild(chips); box.appendChild(note);
+    el.appendChild(box);
+  });
+  updateProgramEndLabel();
+}
+async function saveProgram(){
+  const title = document.getElementById('progTitle').value.trim();
+  const date_start = document.getElementById('progStart').value;
+  const st = document.getElementById('progStatus');
+  if(!title){ st.textContent = 'Donne un nom au programme'; return; }
+  if(!date_start){ st.textContent = 'Choisis une date de début'; return; }
+  if(editingProgram.weeks.length === 0){ st.textContent = 'Ajoute au moins une semaine'; return; }
+  const row = { title, date_start, weeks: editingProgram.weeks, active:true };
+  try{
+    let res;
+    if(editingProgram.id){
+      res = await apiFetch(`programs?id=eq.${editingProgram.id}`, { method:'PATCH', headers:{'Prefer':'return=minimal'}, body: JSON.stringify(row) });
+    }else{
+      res = await apiFetch('programs', { method:'POST', headers:{'Prefer':'return=minimal'}, body: JSON.stringify(row) });
+    }
+    if(res && res.ok === false) throw new Error('save failed');
+    showProgramList();
+    renderProgramList();
+  }catch(err){
+    console.error(err);
+    st.textContent = 'Échec de la sauvegarde';
+  }
+}
+document.getElementById('manageProgramsBtn').addEventListener('click', openProgramModal);
+document.getElementById('programClose').addEventListener('click', () => {
+  document.getElementById('programOverlay').style.display = 'none';
+  loadHoraireDay();
+});
+document.getElementById('programNewBtn').addEventListener('click', () => openProgramEditor(null));
+document.getElementById('progCancel').addEventListener('click', showProgramList);
+document.getElementById('progSave').addEventListener('click', saveProgram);
+document.getElementById('progStart').addEventListener('change', () => { editingProgram.date_start = document.getElementById('progStart').value; updateProgramEndLabel(); });
+document.getElementById('progTitle').addEventListener('input', () => { editingProgram.title = document.getElementById('progTitle').value; });
+document.getElementById('progAddWeek').addEventListener('click', () => {
+  const last = editingProgram.weeks[editingProgram.weeks.length-1];
+  editingProgram.weeks.push(last ? { days:[...last.days], note:last.note||'' } : { days:[1,3,5], note:'' });
+  renderProgramWeeks();
+});
 
 async function toggleScheduleEntry(t, newDone, comment){
   const d = horDateForOffset(horOffset);
@@ -2283,8 +2569,21 @@ async function searchHoraire(kw){
   templates.forEach(t => tplMap[t.id] = t.label);
   const entries = await entRes.json();
   const kwLower = kw.toLowerCase();
+  let progRows = [];
+  try{
+    const [pRes, peRes] = await Promise.all([
+      apiFetch(`programs?select=id,title`),
+      apiFetch(`program_entries?done=eq.true&order=entry_date.desc&limit=1000&select=entry_date,program_id,comment`)
+    ]);
+    const progs = await pRes.json(); const pes = await peRes.json();
+    if(Array.isArray(progs) && Array.isArray(pes)){
+      const pMap = {}; progs.forEach(p => pMap[p.id] = p.title);
+      progRows = pes.map(e => ({ entry_date:e.entry_date, label:(pMap[e.program_id]||'?'), comment:e.comment||'' }));
+    }
+  }catch(e){}
   return entries
     .map(e => ({ entry_date: e.entry_date, label: tplMap[e.template_id] || '?', comment: e.comment || '' }))
+    .concat(progRows)
     .filter(r => r.label.toLowerCase().includes(kwLower) || r.comment.toLowerCase().includes(kwLower))
     .sort((a,b) => b.entry_date.localeCompare(a.entry_date));
 }
